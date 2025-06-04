@@ -1,0 +1,56 @@
+.vault-stats
+# 编译生成的类文件
+*.class
+
+# 日志文件
+*.log
+
+# 临时文件
+*.tmp
+*.bak
+*.swp
+
+# 构建工具生成的目录
+/target/
+/build/
+/out/
+
+# Maven 特定文件
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+
+# Gradle 特定文件
+.gradle/
+build/
+
+# Eclipse IDE 生成的文件
+.classpath
+.project
+.settings/
+.metadata/
+
+# IntelliJ IDEA 生成的文件
+.idea/
+*.iml
+*.iws
+
+# NetBeans IDE 生成的文件
+nbproject/private/
+build/
+nbbuild/
+dist/
+nbdist/
+.nb-gradle/
+
+# VS Code 生成的文件
+.vscode/
+
+# 操作系统生成的文件
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Icon?
+._.DS_Store
