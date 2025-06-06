@@ -183,7 +183,7 @@ public class DoublyLinkedList<T> {
             System.out.println(toString());
         else{
             tag =tag.trim();
-            out.println(STR."\{tag}\{toString()}");
+            out.println(tag + toString());
         }
     }
 

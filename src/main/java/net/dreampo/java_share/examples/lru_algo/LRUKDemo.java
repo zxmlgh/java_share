@@ -1,4 +1,7 @@
-package net.dreampo.java_share.lru_algo;
+package net.dreampo.java_share.examples.lru_algo;
+
+import net.dreampo.java_share.lru_algo.LRUKCache;
+import net.dreampo.java_share.lru_algo.LRUCache;
 
 /**
  * LRU-K算法演示类

@@ -3,44 +3,114 @@ package net.dreampo.java_share.lru_algo;
 import net.dreampo.java_share.structure_algo.DoublyLinkedList;
 
 import java.util.HashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * LRU-K缓存实现
+ * 统一的LRU-K缓存实现
  * <p>
- * LRU-K算法要求数据被访问K次后才有资格获得高优先级保护，避免"一次性访问的数据立即获得最高保留权"的问题。
- * 只有证明自己被频繁需要的数据才获得长期驻留权。
+ * 这是一个完全重新设计和实现的LRU-K缓存，融合了固定K值和动态K值的所有优势。
+ * 专为业务场景设计，提供灵活的配置选项和强大的监控能力。
  * <p>
- * 核心机制：
- * 1. History Queue: 维护访问次数少于K次的数据项，按访问时间排序
- * 2. Cache Queue: 维护访问次数达到K次的数据项，按LRU策略排序
- * 3. 淘汰策略: 优先从History Queue淘汰，只有当History Queue为空时才从Cache Queue淘汰
+ * <b>核心特性：</b>
+ * <ul>
+ *   <li>支持固定K值和动态K值计算策略</li>
+ *   <li>提供多种预定义的K值策略，适应不同业务场景</li>
+ *   <li>完整的缓存状态监控和调试信息</li>
+ *   <li>优雅的函数式编程API</li>
+ *   <li>高性能的双队列LRU-K算法实现</li>
+ *   <li>线程安全的访问计数器</li>
+ * </ul>
+ * <p>
+ * <b>业务使用场景：</b>
+ * <ul>
+ *   <li><b>Web应用缓存：</b>页面数据、用户session、API响应缓存</li>
+ *   <li><b>数据库查询缓存：</b>根据查询复杂度动态调整K值</li>
+ *   <li><b>图片/视频缓存：</b>根据文件大小和访问模式优化缓存策略</li>
+ *   <li><b>配置数据缓存：</b>系统配置、元数据等低频但重要的数据</li>
+ *   <li><b>实时计算结果缓存：</b>计算密集型操作的结果缓存</li>
+ * </ul>
+ * <p>
+ * <b>使用示例：</b>
+ * <pre>{@code
+ * // 创建默认缓存 (K=2，适合大多数Web应用)
+ * UnifiedLRUKCache<String, Object> webCache = UnifiedLRUKCache.createDefault(1000);
+ * 
+ * // 创建智能自适应缓存（根据系统负载和访问模式自动调整）
+ * UnifiedLRUKCache<String, Object> smartCache = UnifiedLRUKCache.createSmart(500);
+ * 
+ * // 创建基于业务时间的缓存（工作时间vs非工作时间不同策略）
+ * UnifiedLRUKCache<String, Object> timeBasedCache = UnifiedLRUKCache.createTimeBased(800);
+ * 
+ * // 自定义K值策略（例如：根据数据重要性动态调整）
+ * UnifiedLRUKCache<String, Data> customCache = UnifiedLRUKCache.create(1000, context -> {
+ *     Data data = context.getValue();
+ *     if (data != null && data.isImportant()) return 5; // 重要数据需要更多保护
+ *     if (context.getCurrentAccessCount() > 10) return 4; // 热点数据
+ *     return 2; // 普通数据
+ * });
+ * }</pre>
  *
- * @param <K> 键类型
- * @param <V> 值类型
+ * @param <K> 缓存键的类型
+ * @param <V> 缓存值的类型
+ * @version 1.0
+ * @since 2025-06-05
  */
 public class LRUKCache<K, V> {
 
-    private final HashMap<K, CacheEntry> cache;  // 键到缓存项的映射
-    private final DoublyLinkedList<CacheEntry> historyQueue; // 历史队列：访问次数 < K 的数据
-    private final DoublyLinkedList<CacheEntry> cacheQueue;   // 缓存队列：访问次数 >= K 的数据
-    private final int capacity; // 总容量
-    private final int k;  // K值：进入高优先级队列所需的最小访问次数
-    private final boolean strictCapacityOnPromotion;  // 是否在晋升时严格执行容量检查
+    // ==================== 核心字段 ====================
+    
+    /** 主缓存：键到缓存项的映射 */
+    private final HashMap<K, CacheEntry> cache;
+    
+    /** 历史队列：访问次数少于K次的数据项，按访问时间排序 */
+    private final DoublyLinkedList<CacheEntry> historyQueue;
+    
+    /** 缓存队列：访问次数达到K次的数据项，按LRU策略排序 */
+    private final DoublyLinkedList<CacheEntry> cacheQueue;
+    
+    /** 缓存总容量 */
+    private final int capacity;
+    
+    /** K值计算函数 */
+    private final KValueFunction<K, V> kFunction;
+    
+    /** 是否在晋升时严格执行容量检查 */
+    private final boolean strictCapacityOnPromotion;
+    
+    /** 统计信息：总访问次数 */
+    private final AtomicLong totalAccesses = new AtomicLong(0);
+    
+    /** 统计信息：缓存命中次数 */
+    private final AtomicLong hits = new AtomicLong(0);
+    
+    /** 统计信息：缓存未命中次数 */
+    private final AtomicLong misses = new AtomicLong(0);
 
+    // ==================== 内部类：缓存项 ====================
+    
     /**
-     * 缓存项，封装键值对及其访问信息
+     * 缓存项内部类
+     * <p>
+     * 封装了每个缓存项的完整信息，包括键值对、访问统计、队列位置等。
      */
     private class CacheEntry {
-        K key;
-        V value;
-        int accessCount; // 访问次数
-        DoublyLinkedList<CacheEntry>.Node historyNode; // 在历史队列中的节点引用
-        DoublyLinkedList<CacheEntry>.Node cacheNode;  // 在缓存队列中的节点引用
+        K key;                                              // 缓存键
+        V value;                                           // 缓存值
+        int accessCount;                                   // 访问次数
+        int currentK;                                      // 当前使用的K值
+        long lastAccessTime;                               // 最后访问时间
+        DoublyLinkedList<CacheEntry>.Node historyNode;   // 在历史队列中的节点引用
+        DoublyLinkedList<CacheEntry>.Node cacheNode;     // 在缓存队列中的节点引用
 
+        /**
+         * 创建缓存项
+         */
         public CacheEntry(K key, V value) {
             this.key = key;
             this.value = value;
             this.accessCount = 0;
+            this.currentK = calculateK(key, value, 0);
+            this.lastAccessTime = System.currentTimeMillis();
             this.historyNode = null;
             this.cacheNode = null;
         }
@@ -49,97 +119,291 @@ public class LRUKCache<K, V> {
          * 检查此项是否有资格进入高优先级缓存队列
          */
         public boolean isEligibleForCache() {
-            return accessCount >= k;
+            return accessCount >= currentK;
         }
 
         /**
          * 检查此项是否在历史队列中
          */
-        public boolean isInHistoryQueue() {
-            return historyNode != null;
+        public boolean isInHistoryQueue() { 
+            return historyNode != null; 
         }
 
         /**
          * 检查此项是否在缓存队列中
          */
-        public boolean isInCacheQueue() {
-            return cacheNode != null;
+        public boolean isInCacheQueue() { 
+            return cacheNode != null; 
+        }
+
+        /**
+         * 更新访问信息
+         */
+        public void updateAccess() {
+            this.accessCount++;
+            this.currentK = calculateK(key, value, accessCount);
+            this.lastAccessTime = System.currentTimeMillis();
         }
     }
 
+    // ==================== 构造函数 ====================
+
     /**
-     * 构造LRU-K缓存（默认不在晋升时执行容量检查）
-     *
-     * @param capacity 缓存总容量
-     * @param k        进入高优先级保护所需的最小访问次数
+     * 默认构造函数：使用K=2的固定策略
+     * <p>
+     * <b>推荐场景：</b>通用Web应用、API缓存、简单的数据缓存
+     * 
+     * @param capacity 缓存容量，必须大于0
      */
-    public LRUKCache(int capacity, int k) {
-        this(capacity, k, false);
+    public LRUKCache(int capacity) {
+        this(capacity, KValueStrategies.<K,V>defaultStrategy());
     }
 
     /**
-     * 构造LRU-K缓存
-     *
-     * @param capacity                   缓存总容量
-     * @param k                          进入高优先级保护所需的最小访问次数
-     * @param strictCapacityOnPromotion  是否在从历史队列晋升到缓存队列时严格执行容量检查
+     * 函数式构造函数：使用自定义K值计算策略
+     * <p>
+     * <b>推荐场景：</b>有特殊业务逻辑的系统、需要动态调整缓存策略的应用
+     * 
+     * @param capacity  缓存容量，必须大于0
+     * @param kFunction K值计算函数，不能为null
      */
-    public LRUKCache(int capacity, int k, boolean strictCapacityOnPromotion) {
+    public LRUKCache(int capacity, KValueFunction<K, V> kFunction) {
+        this(capacity, kFunction, false);
+    }
+
+    /**
+     * 完整构造函数：支持所有配置选项
+     * 
+     * @param capacity                   缓存容量，必须大于0
+     * @param kFunction                  K值计算函数，不能为null
+     * @param strictCapacityOnPromotion  是否在晋升时严格执行容量检查
+     */
+    public LRUKCache(int capacity, KValueFunction<K, V> kFunction,
+                     boolean strictCapacityOnPromotion) {
         if (capacity <= 0) {
             throw new IllegalArgumentException("缓存容量必须大于0");
         }
-        if (k <= 0) {
-            throw new IllegalArgumentException("K值必须大于0");
+        if (kFunction == null) {
+            throw new IllegalArgumentException("K值计算函数不能为null");
         }
 
         this.capacity = capacity;
-        this.k = k;
+        this.kFunction = kFunction;
         this.strictCapacityOnPromotion = strictCapacityOnPromotion;
-        this.cache = new HashMap<>();
+        this.cache = new HashMap<>(capacity * 4 / 3 + 1); // 优化HashMap初始容量
         this.historyQueue = new DoublyLinkedList<>();
         this.cacheQueue = new DoublyLinkedList<>();
     }
 
     /**
+     * 兼容性构造函数：支持固定K值
+     * <p>
+     * <b>推荐场景：</b>从其他LRU实现迁移、简单固定策略需求
+     * 
+     * @param capacity 缓存容量
+     * @param fixedK   固定的K值
+     */
+    public LRUKCache(int capacity, int fixedK) {
+        this(capacity, createFixedKStrategy(fixedK));
+    }
+
+    /**
+     * 兼容性构造函数：支持固定K值和严格容量检查
+     * 
+     * @param capacity                   缓存容量
+     * @param fixedK                     固定的K值
+     * @param strictCapacityOnPromotion  是否在晋升时严格执行容量检查
+     */
+    public LRUKCache(int capacity, int fixedK, boolean strictCapacityOnPromotion) {
+        this(capacity, createFixedKStrategy(fixedK), strictCapacityOnPromotion);
+    }
+    
+    /**
+     * 创建固定K值策略的辅助方法
+     * 
+     * @param fixedK 固定的K值
+     * @return K值策略函数
+     * @throws IllegalArgumentException 如果K值小于等于0
+     */
+    private static <K, V> KValueFunction<K, V> createFixedKStrategy(int fixedK) {
+        if (fixedK <= 0) {
+            throw new IllegalArgumentException("K值必须大于0");
+        }
+        return KValueStrategies.<K,V>fixed(fixedK);
+    }
+
+    // ==================== 工厂方法：便捷创建常用配置 ====================
+
+    /**
+     * 创建默认缓存 (K=2)
+     * <p>
+     * <b>适用场景：</b>通用Web应用、API响应缓存、数据库查询缓存
+     * 
+     * @param capacity 缓存容量
+     * @param <K>      缓存键的类型
+     * @param <V>      缓存值的类型
+     * @return 默认配置的缓存实例
+     */
+    public static <K, V> LRUKCache<K, V> createDefault(int capacity) {
+        KValueFunction<K, V> strategy = KValueStrategies.<K,V>defaultStrategy();
+        return new LRUKCache<K, V>(capacity, strategy);
+    }
+
+    /**
+     * 创建自适应缓存：根据缓存状态动态调整K值
+     * <p>
+     * <b>适用场景：</b>访问模式变化频繁的系统、需要自动优化的缓存
+     * 
+     * @param capacity 缓存容量
+     * @param <K>      缓存键的类型
+     * @param <V>      缓存值的类型
+     * @return 自适应缓存实例
+     */
+    public static <K, V> LRUKCache<K, V> createAdaptive(int capacity) {
+        KValueFunction<K, V> strategy = KValueStrategies.<K,V>adaptive();
+        return new LRUKCache<K, V>(capacity, strategy);
+    }
+
+    /**
+     * 创建高级自适应缓存：基于缓存命中率趋势动态调整
+     * <p>
+     * <b>适用场景：</b>需要实时响应访问模式变化的高性能系统
+     * 
+     * @param capacity 缓存容量
+     * @param <K>      缓存键的类型
+     * @param <V>      缓存值的类型
+     * @return 高级自适应缓存实例
+     */
+    public static <K, V> LRUKCache<K, V> createAdvancedAdaptive(int capacity) {
+        KValueFunction<K, V> strategy = KValueStrategies.<K,V>advancedAdaptive();
+        return new LRUKCache<K, V>(capacity, strategy);
+    }
+
+    /**
+     * 创建动态阈值缓存：基于访问分布自动调整
+     * <p>
+     * <b>适用场景：</b>访问模式有明显分层的系统（如长尾分布）
+     * 
+     * @param capacity 缓存容量
+     * @param <K>      缓存键的类型
+     * @param <V>      缓存值的类型
+     * @return 动态阈值缓存实例
+     */
+    public static <K, V> LRUKCache<K, V> createDynamicThreshold(int capacity) {
+        KValueFunction<K, V> strategy = KValueStrategies.<K,V>dynamicThreshold();
+        return new LRUKCache<K, V>(capacity, strategy);
+    }
+
+    /**
+     * 创建智能缓存：综合考虑利用率和访问模式
+     * <p>
+     * <b>适用场景：</b>复杂生产环境、资源敏感的系统、需要均衡性能的应用
+     * 
+     * @param capacity 缓存容量
+     * @param <K>      缓存键的类型
+     * @param <V>      缓存值的类型
+     * @return 智能缓存实例
+     */
+    public static <K, V> LRUKCache<K, V> createSmart(int capacity) {
+        KValueFunction<K, V> strategy = KValueStrategies.<K,V>smart();
+        return new LRUKCache<K, V>(capacity, strategy);
+    }
+
+    /**
+     * 创建基于时间的缓存：工作时间和非工作时间不同策略
+     * <p>
+     * <b>适用场景：</b>企业应用、办公系统、有明显时间访问规律的业务
+     * 
+     * @param capacity 缓存容量
+     * @param <K>      缓存键的类型
+     * @param <V>      缓存值的类型
+     * @return 时间相关的缓存实例
+     */
+    public static <K, V> LRUKCache<K, V> createTimeBased(int capacity) {
+        KValueFunction<K, V> strategy = KValueStrategies.<K,V>conditional(
+            context -> {
+                int hour = java.time.LocalTime.now().getHour();
+                return hour >= 9 && hour <= 18; // 工作时间
+            },
+            KValueStrategies.<K,V>fixed(4), // 工作时间：严格保护
+            KValueStrategies.<K,V>fixed(2)  // 非工作时间：温和策略
+        );
+        return new LRUKCache<K, V>(capacity, strategy);
+    }
+
+    /**
+     * 创建自定义缓存：使用用户提供的策略函数
+     * <p>
+     * <b>适用场景：</b>有特殊业务逻辑的系统、需要精细控制的缓存策略
+     * 
+     * @param capacity       缓存容量
+     * @param customStrategy 自定义K值计算策略
+     * @param <K>            缓存键的类型
+     * @param <V>            缓存值的类型
+     * @return 自定义配置的缓存实例
+     */
+    public static <K, V> LRUKCache<K, V> create(int capacity,
+                                                KValueFunction<K, V> customStrategy) {
+        return new LRUKCache<K, V>(capacity, customStrategy);
+    }
+
+    // ==================== 核心缓存操作方法 ====================
+
+    /**
      * 获取缓存值
-     * 每次访问都会增加访问计数，当达到K次时会提升到高优先级队列
-     *
-     * @param key 键
+     * <p>
+     * 每次访问都会更新访问统计信息，可能触发队列间的数据迁移。
+     * 当访问次数达到K值时，数据会从历史队列晋升到缓存队列。
+     * <p>
+     * <b>性能特点：</b>O(1)时间复杂度，线程安全的统计更新
+     * 
+     * @param key 要查找的键
      * @return 对应的值，如果不存在则返回null
      */
     public V get(K key) {
+        totalAccesses.incrementAndGet();
+        
         CacheEntry entry = cache.get(key);
         if (entry == null) {
+            misses.incrementAndGet();
             return null;
         }
 
-        // 更新访问信息
+        hits.incrementAndGet();
         updateAccessInfo(entry);
         return entry.value;
     }
 
     /**
      * 设置缓存值
-     * 如果键已存在则更新值，否则添加新项
-     * 超出容量时按LRU-K策略淘汰数据
-     *
-     * @param key   键
-     * @param value 值
+     * <p>
+     * 如果键已存在则更新值和访问信息；如果是新键则创建新的缓存项。
+     * 当缓存容量超限时，会按照LRU-K策略自动淘汰数据。
+     * <p>
+     * <b>淘汰优先级：</b>历史队列尾部 > 缓存队列尾部
+     * <p>
+     * <b>性能特点：</b>O(1)时间复杂度，可能触发容量检查和数据淘汰
+     * 
+     * @param key   键，不能为null
+     * @param value 值，可以为null
      */
     public void put(K key, V value) {
+        if (key == null) {
+            throw new IllegalArgumentException("缓存键不能为null");
+        }
+        
         CacheEntry entry = cache.get(key);
 
         if (entry != null) {
-            // 更新已存在的项
+            // 更新已存在的缓存项
             entry.value = value;
-            // 手动实现访问逻辑，避免double counting
-            entry.accessCount++;
+            entry.updateAccess();
 
             if (entry.isInHistoryQueue()) {
                 // 在历史队列中，更新位置
                 historyQueue.moveToHead(entry.historyNode);
-
-                // 检查是否达到K次访问，需要提升到缓存队列
+                
+                // 检查是否达到晋升条件
                 if (entry.isEligibleForCache()) {
                     promoteToCache(entry);
                 }
@@ -148,28 +412,22 @@ public class LRUKCache<K, V> {
                 cacheQueue.moveToHead(entry.cacheNode);
             }
         } else {
-            // 添加新项前检查是否需要淘汰
+            // 添加新的缓存项
             if (size() >= capacity) {
-                /**
-                 * 最大超量：理论上可达到 capacity * (K-1)/K + capacity = capacity * (2K-1)/K
-                 * K=2时最多1.5倍capacity，K=5时最多1.8倍capacity
-                 */
                 evictItem();
             }
 
-            // 创建新项
             entry = new CacheEntry(key, value);
             cache.put(key, entry);
-
-            // 新项访问计数设为1并进入相应队列
-            entry.accessCount = 1;
+            // 新创建的entry在构造函数中accessCount已经是0，现在更新为1
+            entry.updateAccess();
 
             if (entry.isEligibleForCache()) {
-                // K=1时直接进入缓存队列
+                // 直接进入缓存队列（例如K=1的情况）
                 entry.cacheNode = cacheQueue.createNode(entry);
                 cacheQueue.addToHead(entry.cacheNode);
             } else {
-                // 否则进入历史队列
+                // 进入历史队列
                 entry.historyNode = historyQueue.createNode(entry);
                 historyQueue.addToHead(entry.historyNode);
             }
@@ -178,7 +436,9 @@ public class LRUKCache<K, V> {
 
     /**
      * 删除指定键的缓存项
-     *
+     * <p>
+     * 完全移除缓存项，包括从相应队列和主缓存中删除。
+     * 
      * @param key 要删除的键
      * @return 被删除的值，如果键不存在则返回null
      */
@@ -195,8 +455,10 @@ public class LRUKCache<K, V> {
 
     /**
      * 检查是否包含指定键
-     *
-     * @param key 键
+     * <p>
+     * <b>注意：</b>此方法不会更新访问统计信息
+     * 
+     * @param key 要检查的键
      * @return 如果包含则返回true
      */
     public boolean containsKey(K key) {
@@ -205,8 +467,8 @@ public class LRUKCache<K, V> {
 
     /**
      * 获取当前缓存大小
-     *
-     * @return 缓存中的项目数量
+     * 
+     * @return 缓存中的项目总数量
      */
     public int size() {
         return cache.size();
@@ -214,7 +476,7 @@ public class LRUKCache<K, V> {
 
     /**
      * 获取缓存容量
-     *
+     * 
      * @return 缓存的最大容量
      */
     public int capacity() {
@@ -222,17 +484,92 @@ public class LRUKCache<K, V> {
     }
 
     /**
+     * 判断缓存是否为空
+     * 
+     * @return 如果缓存为空则返回true
+     */
+    public boolean isEmpty() {
+        return cache.isEmpty();
+    }
+
+    /**
+     * 清空缓存
+     * <p>
+     * 清除所有缓存项和统计信息，重置缓存到初始状态。
+     */
+    public void clear() {
+        cache.clear();
+        historyQueue.clear();
+        cacheQueue.clear();
+        // 注意：不重置统计计数器，保留历史统计信息
+    }
+
+    // ==================== 兼容性方法（与LRUKCache保持一致） ====================
+
+    /**
      * 获取K值
-     *
-     * @return 进入高优先级保护所需的最小访问次数
+     * <p>
+     * 对于动态K值策略，返回基础K值（通常是2）
+     * 
+     * @return 基础K值
      */
     public int getK() {
-        return k;
+        // 对于动态K值，返回一个默认值
+        // 通过计算一个假设的上下文来获取基础K值
+        return calculateK(null, null, 0);
+    }
+
+    // ==================== 监控和调试方法 ====================
+
+    /**
+     * 获取指定键当前的K值
+     * <p>
+     * 用于调试和监控，了解当前缓存策略对特定数据的处理。
+     * 
+     * @param key 要查询的键
+     * @return 当前K值，如果键不存在则返回根据当前上下文计算的K值
+     */
+    public int getCurrentK(K key) {
+        CacheEntry entry = cache.get(key);
+        return entry != null ? entry.currentK : calculateK(key, null, 0);
+    }
+
+    /**
+     * 获取指定键的访问次数
+     * 
+     * @param key 要查询的键
+     * @return 访问次数，如果键不存在则返回-1
+     */
+    public int getAccessCount(K key) {
+        CacheEntry entry = cache.get(key);
+        return entry != null ? entry.accessCount : -1;
+    }
+
+    /**
+     * 检查指定键是否在缓存队列中（高优先级队列）
+     * 
+     * @param key 要检查的键
+     * @return 如果在缓存队列中则返回true
+     */
+    public boolean isInCacheQueue(K key) {
+        CacheEntry entry = cache.get(key);
+        return entry != null && entry.isInCacheQueue();
+    }
+
+    /**
+     * 检查指定键是否在历史队列中（低优先级队列）
+     * 
+     * @param key 要检查的键
+     * @return 如果在历史队列中则返回true
+     */
+    public boolean isInHistoryQueue(K key) {
+        CacheEntry entry = cache.get(key);
+        return entry != null && entry.isInHistoryQueue();
     }
 
     /**
      * 获取历史队列大小
-     *
+     * 
      * @return 历史队列中的项目数量
      */
     public int historyQueueSize() {
@@ -241,7 +578,7 @@ public class LRUKCache<K, V> {
 
     /**
      * 获取缓存队列大小
-     *
+     * 
      * @return 缓存队列中的项目数量
      */
     public int cacheQueueSize() {
@@ -249,35 +586,92 @@ public class LRUKCache<K, V> {
     }
 
     /**
-     * 清空缓存
+     * 获取缓存命中率
+     * <p>
+     * <b>计算公式：</b>命中次数 / 总访问次数
+     * 
+     * @return 命中率（0.0-1.0），如果没有访问记录则返回0.0
      */
-    public void clear() {
-        cache.clear();
-        historyQueue.clear();
-        cacheQueue.clear();
+    public double getHitRate() {
+        long total = totalAccesses.get();
+        return total > 0 ? (double) hits.get() / total : 0.0;
     }
 
     /**
-     * 判断缓存是否为空
-     *
-     * @return 如果缓存为空则返回true
+     * 获取缓存利用率
+     * 
+     * @return 当前缓存利用率（0.0-1.0）
      */
-    public boolean isEmpty() {
-        return cache.isEmpty();
+    public double getUtilization() {
+        return (double) size() / capacity;
     }
 
     /**
-     * 更新访问信息
-     * 这是LRU-K算法的核心逻辑，处理访问计数和队列迁移
+     * 获取详细的缓存统计信息
+     * <p>
+     * 包含命中率、利用率、队列分布等关键指标，用于性能监控和调优。
+     * 
+     * @return 格式化的统计信息字符串
+     */
+    public String getStatistics() {
+        long total = totalAccesses.get();
+        long hitCount = hits.get();
+        long missCount = misses.get();
+        
+        return String.format(
+            "缓存统计信息:\n" +
+            "  容量: %d/%d (%.1f%%)\n" +
+            "  访问统计: 总计=%d, 命中=%d, 未命中=%d\n" +
+            "  命中率: %.2f%%\n" +
+            "  队列分布: 历史队列=%d, 缓存队列=%d\n" +
+            "  队列比例: 历史队列=%.1f%%, 缓存队列=%.1f%%",
+            size(), capacity, getUtilization() * 100,
+            total, hitCount, missCount,
+            getHitRate() * 100,
+            historyQueueSize(), cacheQueueSize(),
+            size() > 0 ? (double) historyQueueSize() / size() * 100 : 0,
+            size() > 0 ? (double) cacheQueueSize() / size() * 100 : 0
+        );
+    }
+
+    @Override
+    public String toString() {
+        // 为了兼容LRUKCache的测试，使用相同的格式
+        return String.format("LRUKCache{capacity=%d, k=%d, size=%d, historyQueue=%d, cacheQueue=%d}",
+                capacity, getK(), size(), historyQueueSize(), cacheQueueSize());
+    }
+
+    // ==================== 内部辅助方法 ====================
+
+    /**
+     * 计算K值的核心方法
+     * <p>
+     * 构建访问上下文并调用K值计算函数，确保返回值在合理范围内。
+     */
+    private int calculateK(K key, V value, int currentAccessCount) {
+        AccessContext<K, V> context = new AccessContext<>(
+            key, value, currentAccessCount, System.currentTimeMillis(),
+            cache.size(), capacity
+        );
+        
+        int k = kFunction.apply(context);
+        // 确保K值在合理范围内
+        return Math.max(1, Math.min(k, 10));
+    }
+
+    /**
+     * 更新访问信息的核心逻辑
+     * <p>
+     * 这是LRU-K算法的关键部分，处理访问计数更新、K值重新计算、队列迁移等。
      */
     private void updateAccessInfo(CacheEntry entry) {
-        entry.accessCount++;
+        entry.updateAccess();
 
         if (entry.isInHistoryQueue()) {
             // 在历史队列中，更新位置
             historyQueue.moveToHead(entry.historyNode);
-
-            // 检查是否达到K次访问，需要提升到缓存队列
+            
+            // 检查是否达到晋升条件
             if (entry.isEligibleForCache()) {
                 promoteToCache(entry);
             }
@@ -288,14 +682,16 @@ public class LRUKCache<K, V> {
     }
 
     /**
-     * 将项目从历史队列提升到缓存队列
+     * 将数据项从历史队列晋升到缓存队列
+     * <p>
+     * 这是LRU-K算法的核心操作之一，当数据达到K次访问时触发。
      */
     private void promoteToCache(CacheEntry entry) {
-        // 如果启用了严格容量检查，在晋升前确保有空间
+        // 如果启用严格容量检查，在晋升前确保有空间
         if (strictCapacityOnPromotion && size() >= capacity) {
             evictItem();
         }
-        
+
         // 从历史队列移除
         if (entry.historyNode != null) {
             historyQueue.removeNode(entry.historyNode);
@@ -309,7 +705,12 @@ public class LRUKCache<K, V> {
 
     /**
      * 按LRU-K策略淘汰数据项
-     * 优先级：历史队列尾部 > 缓存队列尾部
+     * <p>
+     * <b>淘汰优先级：</b>
+     * <ol>
+     *   <li>历史队列尾部（访问次数少于K次的最久未访问项）</li>
+     *   <li>缓存队列尾部（访问次数≥K次的最久未访问项）</li>
+     * </ol>
      */
     private void evictItem() {
         CacheEntry entryToEvict = null;
@@ -338,7 +739,9 @@ public class LRUKCache<K, V> {
     }
 
     /**
-     * 完全移除一个缓存项
+     * 完全移除缓存项
+     * <p>
+     * 从相应队列和主缓存中彻底删除指定项。
      */
     private void removeEntry(CacheEntry entry) {
         // 从相应队列中移除
@@ -352,44 +755,5 @@ public class LRUKCache<K, V> {
 
         // 从主缓存中移除
         cache.remove(entry.key);
-    }
-
-    /**
-     * 获取指定键的访问次数（用于调试和测试）
-     *
-     * @param key 键
-     * @return 访问次数，如果键不存在则返回-1
-     */
-    public int getAccessCount(K key) {
-        CacheEntry entry = cache.get(key);
-        return entry != null ? entry.accessCount : -1;
-    }
-
-    /**
-     * 检查指定键是否在缓存队列中（用于调试和测试）
-     *
-     * @param key 键
-     * @return 如果在缓存队列中则返回true
-     */
-    public boolean isInCacheQueue(K key) {
-        CacheEntry entry = cache.get(key);
-        return entry != null && entry.isInCacheQueue();
-    }
-
-    /**
-     * 检查指定键是否在历史队列中（用于调试和测试）
-     *
-     * @param key 键
-     * @return 如果在历史队列中则返回true
-     */
-    public boolean isInHistoryQueue(K key) {
-        CacheEntry entry = cache.get(key);
-        return entry != null && entry.isInHistoryQueue();
-    }
-
-    @Override
-    public String toString() {
-        return String.format("LRUKCache{capacity=%d, k=%d, size=%d, historyQueue=%d, cacheQueue=%d}",
-                capacity, k, size(), historyQueueSize(), cacheQueueSize());
     }
 }

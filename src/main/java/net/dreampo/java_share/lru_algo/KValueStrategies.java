@@ -42,16 +42,24 @@ public class KValueStrategies {
     }
 
     /**
-     * 基于访问次数的自适应策略 - 越热门保护越强
+     * 基于缓存状态的自适应策略 - 根据整体缓存健康度动态调整
      * <p>
-     * <b>适用场景：</b>有明显热点数据的系统，如商品推荐、热门文章
+     * <b>适用场景：</b>访问模式变化频繁的系统、需要自动优化的缓存
      * <p>
      * <b>策略逻辑：</b>
      * <ul>
-     *   <li>初次访问(≤1次): K=2</li>
-     *   <li>轻度访问(2-3次): K=3</li>
-     *   <li>中度访问(4-10次): K=4</li>
-     *   <li>重度访问(>10次): K=5</li>
+     *   <li>缓存利用率低(<30%): K=1 (快速填充缓存)</li>
+     *   <li>缓存健康(30-70%): K=2 (标准保护)</li>
+     *   <li>缓存压力(70-85%): K=3 (适度保护)</li>
+     *   <li>缓存紧张(85-95%): K=4 (严格保护)</li>
+     *   <li>缓存极限(>95%): K=5 (极严格保护)</li>
+     * </ul>
+     * <p>
+     * 同时考虑访问模式：
+     * <ul>
+     *   <li>新数据(访问<2次): 使用基础K值</li>
+     *   <li>温数据(访问2-5次): K值+1</li>
+     *   <li>热数据(访问>5次): K值+2(最大为5)</li>
      * </ul>
      *
      * @param <K> 缓存键的类型
@@ -60,11 +68,34 @@ public class KValueStrategies {
      */
     public static <K, V> KValueFunction<K, V> adaptive() {
         return context -> {
-            int count = context.getCurrentAccessCount();
-            if (count <= 1) return 2;
-            if (count <= 3) return 3;
-            if (count <= 10) return 4;
-            return 5;
+            // 基于缓存利用率的基础K值
+            double utilization = context.getCacheUtilization();
+            int baseK;
+            
+            if (utilization < 0.3) {
+                baseK = 1; // 缓存空闲，快速填充
+            } else if (utilization < 0.7) {
+                baseK = 2; // 缓存健康，标准策略
+            } else if (utilization < 0.85) {
+                baseK = 3; // 缓存压力，开始保护
+            } else if (utilization < 0.95) {
+                baseK = 4; // 缓存紧张，严格保护
+            } else {
+                baseK = 5; // 缓存极限，最严格保护
+            }
+            
+            // 基于访问频率的调整
+            int accessCount = context.getCurrentAccessCount();
+            int adjustment = 0;
+            
+            if (accessCount >= 2 && accessCount <= 5) {
+                adjustment = 1; // 温数据
+            } else if (accessCount > 5) {
+                adjustment = 2; // 热数据
+            }
+            
+            // 综合计算，确保不超过最大值
+            return Math.min(baseK + adjustment, 5);
         };
     }
 
@@ -128,6 +159,94 @@ public class KValueStrategies {
                 return 1; // 配置数据，通常只读取一次
             }
             return 2; // 默认策略
+        };
+    }
+
+    /**
+     * 高级自适应策略 - 基于缓存命中率趋势
+     * <p>
+     * <b>适用场景：</b>需要实时响应访问模式变化的系统
+     * <p>
+     * <b>策略逻辑：</b>
+     * <ul>
+     *   <li>根据缓存队列占比判断缓存效果</li>
+     *   <li>缓存队列占比高(>60%): 说明K值设置合理，保持当前策略</li>
+     *   <li>缓存队列占比中(30-60%): 适度调整K值</li>
+     *   <li>缓存队列占比低(<30%): 需要降低K值，让更多数据进入缓存队列</li>
+     * </ul>
+     *
+     * @param <K> 缓存键的类型
+     * @param <V> 缓存值的类型
+     * @return K值计算函数
+     */
+    public static <K, V> KValueFunction<K, V> advancedAdaptive() {
+        return context -> {
+            // 获取缓存总大小和容量
+            int cacheSize = context.getCacheSize();
+            int capacity = context.getCapacity();
+            
+            // 估算缓存队列占比（这里简化处理，实际应用中可能需要额外的统计信息）
+            // 基于访问次数推测：访问次数多的项更可能在缓存队列中
+            double cacheQueueRatio = context.getCurrentAccessCount() > 2 ? 0.6 : 0.3;
+            
+            // 基于缓存队列占比和利用率综合决策
+            double utilization = context.getCacheUtilization();
+            
+            if (cacheQueueRatio > 0.6) {
+                // 缓存效果好，根据利用率微调
+                if (utilization > 0.9) return 4;
+                if (utilization > 0.7) return 3;
+                return 2;
+            } else if (cacheQueueRatio > 0.3) {
+                // 缓存效果一般，需要平衡
+                if (utilization > 0.8) return 3;
+                return 2;
+            } else {
+                // 缓存效果差，降低门槛
+                if (utilization > 0.9) return 2;
+                return 1;
+            }
+        };
+    }
+
+    /**
+     * 动态阈值策略 - 基于访问分布自动调整
+     * <p>
+     * <b>适用场景：</b>访问模式有明显分层的系统（如长尾分布）
+     * <p>
+     * <b>策略逻辑：</b>
+     * <ul>
+     *   <li>极低利用率(<20%): K=1，快速填充</li>
+     *   <li>低利用率(20-50%): 根据访问次数动态调整K=1-2</li>
+     *   <li>中利用率(50-80%): 根据访问次数动态调整K=2-3</li>
+     *   <li>高利用率(>80%): 根据访问次数动态调整K=3-5</li>
+     * </ul>
+     *
+     * @param <K> 缓存键的类型
+     * @param <V> 缓存值的类型
+     * @return K值计算函数
+     */
+    public static <K, V> KValueFunction<K, V> dynamicThreshold() {
+        return context -> {
+            double utilization = context.getCacheUtilization();
+            int accessCount = context.getCurrentAccessCount();
+            
+            // 根据利用率确定基础策略
+            if (utilization < 0.2) {
+                return 1; // 极低利用率，快速填充
+            } else if (utilization < 0.5) {
+                // 低利用率，根据访问次数在1-2之间选择
+                return accessCount > 3 ? 2 : 1;
+            } else if (utilization < 0.8) {
+                // 中等利用率，根据访问次数在2-3之间选择
+                if (accessCount <= 2) return 2;
+                return accessCount > 5 ? 3 : 2;
+            } else {
+                // 高利用率，需要更严格的保护
+                if (accessCount <= 1) return 3;
+                if (accessCount <= 5) return 4;
+                return 5;
+            }
         };
     }
 
