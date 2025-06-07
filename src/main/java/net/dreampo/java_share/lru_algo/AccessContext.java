@@ -9,9 +9,9 @@ package net.dreampo.java_share.lru_algo;
  *
  * @param <K> 缓存键的类型
  * @param <V> 缓存值的类型
- * @author Claude
+ *
  * @version 1.0
- * @since 2025-06-05
+ *
  */
 public class AccessContext<K, V> {
     private final K key;                    // 当前访问的键

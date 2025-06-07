@@ -53,7 +53,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * @param <K> 缓存键的类型
  * @param <V> 缓存值的类型
  * @version 1.0
- * @since 2025-06-05
+ *
  */
 public class LRUKCache<K, V> {
 

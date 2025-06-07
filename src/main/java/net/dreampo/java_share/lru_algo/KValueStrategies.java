@@ -8,9 +8,9 @@ import java.util.function.Function;
  * 提供了多种常用的K值计算策略，覆盖了大部分业务场景。
  * 业务方可以直接使用这些策略，也可以通过组合策略实现更复杂的逻辑。
  *
- * @author Claude
+ *
  * @version 1.0
- * @since 2025-06-05
+ *
  */
 public class KValueStrategies {
     
