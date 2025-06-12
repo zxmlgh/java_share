@@ -124,8 +124,8 @@ public class MouBaoHotProductDemo {
         }
 
         // 为每个品类维护滑动窗口状态
-        Map<String, SlidingWindowState> categoryWindowStates = new HashMap<>();
-        Map<String, Integer> categoryEventIndices = new HashMap<>(); // 每个品类当前处理到的事件索引
+        Map<String, SlidingWindowState> categoryWindowStates = new HashMap();
+        Map<String, Integer> categoryEventIndices = new HashMap(); // 每个品类当前处理到的事件索引
 
         for (String category : eventsByCategory.keySet()) {
             categoryWindowStates.put(category, new SlidingWindowState());
@@ -176,11 +176,16 @@ public class MouBaoHotProductDemo {
                 categoryEventIndices.put(category, currentIndex);
             }
 
-            // 收集当前窗口的结果
-            Map<String, List<ProductScore>> categoryTopProducts = new HashMap<>();
+            /**
+             * 收集当前窗口的结果
+             * key 是品类
+             * value 是Top-N 商品的列表
+             */
+            Map<String, List<ProductScore>> categoryTopProducts = new HashMap();
             int totalEventsInWindow = 0;
 
-            for (Map.Entry<String, SlidingWindowState> entry : categoryWindowStates.entrySet()) {
+            for (Map.Entry<String, SlidingWindowState> entry :
+                    categoryWindowStates.entrySet()) {
                 String category = entry.getKey();
                 SlidingWindowState windowState = entry.getValue();
                 List<ProductScore> topProducts = windowState.getTopProducts(topN);
@@ -197,12 +202,23 @@ public class MouBaoHotProductDemo {
             windowCount++;
         }
 
-        // 输出性能统计
+        /**
+         * 输出性能统计
+         *⚡ 滑动窗口性能统计：
+         * --------------------------------------------------
+         * 总窗口数：36
+         * 添加操作次数：3474
+         * 移除操作次数：3383
+         * 总操作次数：6857
+         * 总事件数：3474
+         * 朴素方法操作次数：125064
+         * 性能提升：94.5%
+         */
         out.println("\n⚡ 滑动窗口性能统计：");
         out.println("-".repeat(50));
         out.printf("总窗口数：%d\n", windowCount);
-        out.printf("添加操作次数：%d\n", addOperations);
-        out.printf("移除操作次数：%d\n", removeOperations);
+        out.printf("窗口滑动后的添加操作次数：%d\n", addOperations);
+        out.printf("窗口滑动后移除操作次数：%d\n", removeOperations);
         out.printf("总操作次数：%d\n", addOperations + removeOperations);
 
         // 计算总事件数
@@ -210,7 +226,7 @@ public class MouBaoHotProductDemo {
                 .mapToLong(List::size)
                 .sum();
         out.printf("总事件数：%d\n", totalEvents);
-
+        out.println("-".repeat(50));
         // 如果使用朴素方法，每个窗口都要处理所有事件
         long naiveOperations = windowCount * totalEvents;
         out.printf("朴素方法操作次数：%d\n", naiveOperations);
@@ -264,7 +280,7 @@ public class MouBaoHotProductDemo {
                     }
 
                     // 热度分在10-100之间
-                    int score = 10 + random.nextInt(91) ;
+                    int score = 10 + random.nextInt(91);
 
                     // 特定时段某些品类会更热
                     if (minute >= 60 && minute <= 120) {
@@ -378,18 +394,27 @@ public class MouBaoHotProductDemo {
         int totalEvents = eventsByCategory.values().stream()
                 .mapToInt(List::size)
                 .sum();
+        // 生成事件数据：共 4 个品类，3474 个事件
         out.printf("生成事件数据：共 %d 个品类，%d 个事件\n",
                 eventsByCategory.size(), totalEvents);
 
+        /**
+         * 打印品类和商品热度事件
+         *   - 美妆护肤: 873 个事件
+         *   - 家用电器: 877 个事件
+         *   - 玩具游戏: 872 个事件
+         *   - 手机数码: 852 个事件
+         */
         for (Map.Entry<String, List<ProductEvent>> entry : eventsByCategory.entrySet()) {
             out.printf("  - %s: %d 个事件\n", entry.getKey(), entry.getValue().size());
         }
 
         // 设置参数
         int windowSizeMinutes = 60;      // 60分钟窗口
-        int slideIntervalMinutes = 15;   // 15分钟滑动
+        int slideIntervalMinutes = 5;   // 5分钟滑动
         int topN = 5;                    // 每个品类Top 5商品
 
+        //窗口大小：60分钟 | 滑动间隔：5分钟 | Top N：5
         out.printf("\n窗口大小：%d分钟 | 滑动间隔：%d分钟 | Top N：%d\n",
                 windowSizeMinutes, slideIntervalMinutes, topN);
 
@@ -399,6 +424,7 @@ public class MouBaoHotProductDemo {
                 eventsByCategory, windowSizeMinutes, slideIntervalMinutes, topN);
         long endTime = System.currentTimeMillis();
 
+        // ⏱️ 分析耗时：6 ms
         out.printf("\n⏱️ 分析耗时：%d ms\n", endTime - startTime);
 
         // 展示结果
